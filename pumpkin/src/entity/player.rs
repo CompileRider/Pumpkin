@@ -2935,6 +2935,26 @@ impl Player {
                     }
                 }
 
+                // Reset fall distance when switching to Spectator or Creative to prevent
+                // fall damage upon switching back to Survival.
+                //
+                // This is a pragmatic workaround: vanilla does NOT reset fallDistance in
+                // setGameMode(). Instead, vanilla relies on multiple defense layers:
+                //   1. noPhysics=true for Spectator — Entity.move() skips checkFallDamage()
+                //   2. abilities.flying=true → Player.aiStep() resets fallDistance every tick
+                //   3. setOnGround(false) forced for Spectators — prevents fallOn() invocation
+                //   4. abilities.mayfly=true → Player.causeFallDamage() returns false
+                //
+                // Pumpkin currently lacks layers 1-4. This explicit reset compensates for
+                // their absence until the full vanilla fall-damage pipeline is implemented.
+                // TODO: Implement vanilla's noPhysics path for Spectator in Entity::move()
+                // TODO: Add per-tick fall_distance reset when abilities.flying is true (mirrors Player.aiStep())
+                // TODO: Force on_ground=false for Spectator players each tick (mirrors Player.tick())
+                // TODO: Add abilities.allow_flying check in LivingEntity::handle_fall_damage() as defense-in-depth
+                if matches!(gamemode, GameMode::Creative | GameMode::Spectator) {
+                    self.living_entity.fall_distance.store(0.0);
+                }
+
                 if gamemode != GameMode::Spectator && self.camera_target_id.load().is_some() {
                     self.camera_target_id.store(None);
                     self.client.send_packet_now(&CSetCamera::new(
