@@ -1,7 +1,7 @@
 use pumpkin_data::dimension::Dimension;
 
 use crate::ProtoChunk;
-use crate::generation::generator::VanillaGenerator;
+use crate::generation::generator::WorldGenerator;
 use crate::world::WorldPortalExt;
 use pumpkin_config::lighting::LightingEngineConfig;
 
@@ -10,7 +10,7 @@ use super::{Cache, Chunk, StagedChunkEnum};
 pub fn generate_single_chunk(
     _dimension: &Dimension,
     _biome_mixer_seed: i64,
-    generator: &VanillaGenerator,
+    generator: &WorldGenerator,
     block_registry: &dyn WorldPortalExt,
     chunk_x: i32,
     chunk_z: i32,
@@ -64,6 +64,8 @@ pub fn generate_single_chunk(
 #[cfg(test)]
 mod tests {
     use crate::biome::hash_seed;
+    use crate::chunk::ChunkHeightmapType;
+    use crate::chunk_system::Chunk;
     use crate::chunk_system::{StagedChunkEnum, generate_single_chunk};
     use crate::generation::get_world_gen;
     use crate::world::WorldPortalExt;
@@ -117,10 +119,10 @@ mod tests {
         let dimension = Dimension::OVERWORLD;
         let seed = Seed(42);
         let block_registry = Arc::new(BlockRegistry);
-        let world_gen = get_world_gen(seed, dimension.clone());
-        let biome_mixer_seed = hash_seed(world_gen.random_config.seed);
+        let world_gen = get_world_gen(seed, dimension.clone(), false, Vec::new(), String::new());
+        let biome_mixer_seed = hash_seed(world_gen.seed());
 
-        let _ = generate_single_chunk(
+        let chunk = generate_single_chunk(
             &dimension,
             biome_mixer_seed,
             &world_gen,
@@ -129,6 +131,25 @@ mod tests {
             0,
             StagedChunkEnum::Full,
         );
+        let Chunk::Level(chunk) = chunk else {
+            panic!("full generation must return a level chunk");
+        };
+        let recalculated = chunk.calculate_heightmap();
+        let generated = chunk.heightmap.lock().unwrap();
+        for x in 0..16 {
+            for z in 0..16 {
+                for heightmap_type in [
+                    ChunkHeightmapType::WorldSurface,
+                    ChunkHeightmapType::MotionBlocking,
+                    ChunkHeightmapType::MotionBlockingNoLeaves,
+                ] {
+                    assert_eq!(
+                        generated.get(heightmap_type, x, z, chunk.section.min_y),
+                        recalculated.get(heightmap_type, x, z, chunk.section.min_y),
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -136,8 +157,8 @@ mod tests {
         let dimension = Dimension::OVERWORLD;
         let seed = Seed(1_782_124_772_053_846_960);
         let block_registry = Arc::new(BlockRegistry);
-        let world_gen = get_world_gen(seed, dimension.clone());
-        let biome_mixer_seed = hash_seed(world_gen.random_config.seed);
+        let world_gen = get_world_gen(seed, dimension.clone(), false, Vec::new(), String::new());
+        let biome_mixer_seed = hash_seed(world_gen.seed());
 
         let chunk = generate_single_chunk(
             &dimension,

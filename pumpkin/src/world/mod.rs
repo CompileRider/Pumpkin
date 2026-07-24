@@ -221,6 +221,7 @@ pub struct World {
     pub dragon_fight: Option<Mutex<dragon_fight::DragonFight>>,
     pub spawn_state: ArcSwap<SpawnState>,
     pub active_chunks: ArcSwap<FxHashSet<Vector2<i32>>>,
+    pub forced_chunks: std::sync::Mutex<FxHashSet<Vector2<i32>>>,
     /// Block entities indexed by chunk, so ticking only visits the currently
     /// active chunks instead of scanning every loaded block entity each tick.
     pub block_entities: DashMap<Vector2<i32>, FxHashMap<BlockPos, Arc<dyn BlockEntity>>>,
@@ -309,6 +310,7 @@ impl World {
             dragon_fight,
             spawn_state: ArcSwap::new(Arc::new(SpawnState::empty())),
             active_chunks: ArcSwap::new(Arc::new(FxHashSet::default())),
+            forced_chunks: std::sync::Mutex::new(FxHashSet::default()),
             server,
             block_entities: DashMap::new(),
         }
@@ -324,6 +326,9 @@ impl World {
                     active_chunks.insert(center.add_raw(dx, dy));
                 }
             }
+        }
+        if let Ok(forced) = self.forced_chunks.lock() {
+            active_chunks.extend(forced.iter().copied());
         }
 
         let mut spawnable_chunks = 0;
@@ -545,7 +550,7 @@ impl World {
         self.broadcast_editioned(&je_packet, &be_packet).await;
     }
 
-    fn component_to_bedrock_text(message: &TextComponent) -> SText {
+    fn component_to_bedrock_text(message: &TextComponent) -> SText<'static> {
         match &*message.0.content {
             pumpkin_util::text::TextContent::Translate {
                 translate,
@@ -607,7 +612,7 @@ impl World {
     pub async fn broadcast_secure_player_chat(
         &self,
         sender: &Arc<Player>,
-        chat_message: &SChatMessage,
+        chat_message: &SChatMessage<'_>,
         decorated_message: &TextComponent,
     ) {
         let messages_sent: i32 = sender.chat_session.lock().await.messages_sent;
@@ -622,8 +627,8 @@ impl World {
                 VarInt(messages_received),
                 sender.gameprofile.id,
                 VarInt(messages_sent),
-                chat_message.signature.clone(),
-                chat_message.message.clone(),
+                chat_message.signature.map(std::convert::Into::into),
+                chat_message.message.into(),
                 chat_message.timestamp,
                 chat_message.salt,
                 sender_last_seen.indexed_for(recipient).await,
@@ -635,11 +640,13 @@ impl World {
             );
             recipient.client.enqueue_packet(packet).await;
 
-            recipient
-                .signature_cache
-                .lock()
-                .await
-                .add_seen_signature(&chat_message.signature.clone().unwrap()); // Unwrap is safe because we check for None in validate_chat_message
+            if let Some(signature) = chat_message.signature {
+                recipient
+                    .signature_cache
+                    .lock()
+                    .await
+                    .add_seen_signature(signature);
+            }
 
             if recipient.gameprofile.id != sender.gameprofile.id {
                 // Sender may update recipient on signatures recipient hasn't seen
@@ -1132,7 +1139,7 @@ impl World {
                     }
                 }
             }
-            if self.level.autosave_ticks > 0 {
+            if self.level.autosave_ticks > 0 && self.level.save_enabled.load(Relaxed) {
                 let autosave = self.level.autosave_ticks as i64;
                 if autosave > 0 && level_time.world_age % autosave == 0 {
                     self.level.should_save.store(true, Relaxed);
@@ -1849,7 +1856,13 @@ impl World {
             has_start_with_map_enabled: false,
             // TODO Bedrock permission level are different
             permission_level: VarInt(2),
-            server_simulation_distance: base_config.simulation_distance.get().into(),
+            server_simulation_distance: server
+                .advanced_config
+                .networking
+                .bedrock
+                .simulation_distance
+                .get()
+                .into(),
             has_locked_behavior_pack: false,
             has_locked_resource_pack: false,
             is_from_locked_world_template: false,
@@ -2534,10 +2547,28 @@ impl World {
             .send_packet_now(&CLogin::new(
                 entity_id,
                 base_config.hardcore,
-                dimensions,
-                base_config.max_players.try_into().unwrap(),
-                base_config.view_distance.get().into(), //  TODO: view distance
-                base_config.simulation_distance.get().into(), // TODO: sim view dinstance
+                &dimensions,
+                server
+                    .advanced_config
+                    .networking
+                    .java
+                    .max_players
+                    .try_into()
+                    .unwrap(),
+                server
+                    .advanced_config
+                    .networking
+                    .java
+                    .view_distance
+                    .get()
+                    .into(), //  TODO: view distance
+                server
+                    .advanced_config
+                    .networking
+                    .java
+                    .simulation_distance
+                    .get()
+                    .into(), // TODO: sim view dinstance
                 false,
                 true,
                 false,
@@ -2555,7 +2586,7 @@ impl World {
                     VarInt(player.get_entity().portal_cooldown.load(Ordering::Relaxed) as i32),
                     self.sea_level.into(),
                 ),
-                base_config.online_mode,
+                server.advanced_config.networking.java.online_mode,
                 // This should stay true even when reports are disabled.
                 // It prevents the annoying popup when joining the server.
                 true,
@@ -3444,14 +3475,27 @@ impl World {
             position.y.round() as i32,
             position.z.round() as i32,
         ));
+        let bedrock_dimension = match target_world.dimension.minecraft_name {
+            "minecraft:the_nether" => 1,
+            "minecraft:the_end" => 2,
+            _ => 0,
+        };
         player
             .client
-            .send_packet_now(&CPlayerSpawnPosition::new(
-                spawn_block_pos,
-                yaw,
-                pitch,
-                target_world.dimension.minecraft_name.to_string(),
-            ))
+            .send_packet_now_editioned(
+                &CPlayerSpawnPosition::new(
+                    spawn_block_pos,
+                    yaw,
+                    pitch,
+                    target_world.dimension.minecraft_name.to_string(),
+                ),
+                &pumpkin_protocol::bedrock::client::CSetSpawnPosition::new(
+                    1, // World spawn
+                    spawn_block_pos,
+                    bedrock_dimension,
+                    spawn_block_pos,
+                ),
+            )
             .await;
 
         player.living_entity.reset_state().await;

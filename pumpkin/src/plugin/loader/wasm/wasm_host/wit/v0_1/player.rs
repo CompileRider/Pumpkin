@@ -47,26 +47,6 @@ use pumpkin_protocol::bedrock::client::set_actor_data::{
 use pumpkin_protocol::codec::var_ulong::VarULong;
 use pumpkin_util::version::{BedrockMinecraftVersion, JavaMinecraftVersion};
 
-use pumpkin_protocol::ser::ReadingError;
-use pumpkin_protocol::ser::deserializer::Deserializer;
-use serde::de::SeqAccess;
-
-pub(crate) struct WitSeqAccess<'a> {
-    pub(crate) deserializer: &'a mut Deserializer<&'a [u8]>,
-}
-
-impl<'de> SeqAccess<'de> for WitSeqAccess<'_> {
-    type Error = ReadingError;
-
-    fn next_element_seed<T>(&mut self, seed: T) -> Result<Option<T::Value>, Self::Error>
-    where
-        T: serde::de::DeserializeSeed<'de>,
-    {
-        let val = seed.deserialize(&mut *self.deserializer)?;
-        Ok(Some(val))
-    }
-}
-
 const fn to_wasm_java_version(
     version: JavaMinecraftVersion,
 ) -> pumpkin::plugin::player::JavaMinecraftVersion {
@@ -1763,7 +1743,9 @@ impl pumpkin::plugin::player::HostJavaPlayer for PluginHostState {
                     client
                         .send_packet_now(
                             &pumpkin_protocol::java::client::config::CConfigShowDialog::new(
-                                pumpkin_protocol::IdOr::Value(DialogNBT(&protocol_dialog)),
+                                pumpkin_protocol::IdOr::Value(DialogNBT::from_dialog(
+                                    &protocol_dialog,
+                                )),
                             ),
                         )
                         .await;
@@ -1772,7 +1754,9 @@ impl pumpkin::plugin::player::HostJavaPlayer for PluginHostState {
                     client
                         .send_packet_now(
                             &pumpkin_protocol::java::client::play::CPlayShowDialog::new(
-                                pumpkin_protocol::IdOr::Value(DialogNBT(&protocol_dialog)),
+                                pumpkin_protocol::IdOr::Value(DialogNBT::from_dialog(
+                                    &protocol_dialog,
+                                )),
                             ),
                         )
                         .await;

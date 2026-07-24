@@ -5,7 +5,7 @@ use pumpkin_data::dimension::Dimension;
 use pumpkin_util::world_seed::Seed;
 use pumpkin_world::ProtoChunk;
 use pumpkin_world::chunk_system::{Cache, Chunk, StagedChunkEnum, generate_single_chunk};
-use pumpkin_world::generation::generator::VanillaGenerator;
+use pumpkin_world::generation::generator::WorldGenerator;
 use pumpkin_world::generation::get_world_gen;
 use pumpkin_world::world::WorldPortalExt;
 use std::hint::black_box;
@@ -13,7 +13,6 @@ use std::sync::Arc;
 
 const SEED: Seed = Seed(42);
 
-// Stub portal — allows all block placements, skips mob spawning.
 struct BlockRegistry;
 impl WorldPortalExt for BlockRegistry {
     fn can_place_at(
@@ -54,11 +53,13 @@ impl WorldPortalExt for BlockRegistry {
     }
 }
 
-/// Build a cache containing chunk 0, 0 at the center so that features
-/// and lighting stages get a 3×3 cache.
+fn make_world_gen() -> Box<WorldGenerator> {
+    get_world_gen(SEED, Dimension::OVERWORLD, false, Vec::new(), String::new())
+}
+
 fn setup_cache(
     target_stage: StagedChunkEnum,
-    world_gen: &VanillaGenerator,
+    world_gen: &WorldGenerator,
     block_registry: &dyn WorldPortalExt,
 ) -> Cache {
     let radius = target_stage.get_direct_radius();
@@ -81,6 +82,7 @@ fn setup_cache(
         StagedChunkEnum::Carvers,
         StagedChunkEnum::Features,
         StagedChunkEnum::Lighting,
+        StagedChunkEnum::Spawn,
     ];
     for stage in pipeline {
         if stage as u8 >= target_stage as u8 {
@@ -97,10 +99,9 @@ fn setup_cache(
     cache
 }
 
-/// Full pipeline
 fn bench_full_chunk_generation(c: &mut Criterion) {
     let dimension = Dimension::OVERWORLD;
-    let world_gen = get_world_gen(SEED, dimension.clone());
+    let world_gen = make_world_gen();
     let block_registry = Arc::new(BlockRegistry);
 
     c.bench_function("full_chunk_generation", |b| {
@@ -118,9 +119,8 @@ fn bench_full_chunk_generation(c: &mut Criterion) {
     });
 }
 
-/// Per-phase benchmarks
 fn bench_biomes_generation(c: &mut Criterion) {
-    let world_gen = get_world_gen(SEED, Dimension::OVERWORLD);
+    let world_gen = make_world_gen();
     let block_registry = Arc::new(BlockRegistry);
 
     c.bench_function("biomes_generation", |b| {
@@ -141,7 +141,7 @@ fn bench_biomes_generation(c: &mut Criterion) {
 }
 
 fn bench_structure_starts_generation(c: &mut Criterion) {
-    let world_gen = get_world_gen(SEED, Dimension::OVERWORLD);
+    let world_gen = make_world_gen();
     let block_registry = Arc::new(BlockRegistry);
 
     c.bench_function("structure_starts_generation", |b| {
@@ -168,7 +168,7 @@ fn bench_structure_starts_generation(c: &mut Criterion) {
 }
 
 fn bench_structure_references_generation(c: &mut Criterion) {
-    let world_gen = get_world_gen(SEED, Dimension::OVERWORLD);
+    let world_gen = make_world_gen();
     let block_registry = Arc::new(BlockRegistry);
 
     c.bench_function("structure_references_generation", |b| {
@@ -195,7 +195,7 @@ fn bench_structure_references_generation(c: &mut Criterion) {
 }
 
 fn bench_noise_generation(c: &mut Criterion) {
-    let world_gen = get_world_gen(SEED, Dimension::OVERWORLD);
+    let world_gen = make_world_gen();
     let block_registry = Arc::new(BlockRegistry);
 
     c.bench_function("noise_generation", |b| {
@@ -216,7 +216,7 @@ fn bench_noise_generation(c: &mut Criterion) {
 }
 
 fn bench_surface_generation(c: &mut Criterion) {
-    let world_gen = get_world_gen(SEED, Dimension::OVERWORLD);
+    let world_gen = make_world_gen();
     let block_registry = Arc::new(BlockRegistry);
 
     c.bench_function("surface_generation", |b| {
@@ -243,7 +243,7 @@ fn bench_surface_generation(c: &mut Criterion) {
 }
 
 fn bench_carvers_generation(c: &mut Criterion) {
-    let world_gen = get_world_gen(SEED, Dimension::OVERWORLD);
+    let world_gen = make_world_gen();
     let block_registry = Arc::new(BlockRegistry);
 
     c.bench_function("carvers_generation", |b| {
@@ -270,7 +270,7 @@ fn bench_carvers_generation(c: &mut Criterion) {
 }
 
 fn bench_features_generation(c: &mut Criterion) {
-    let world_gen = get_world_gen(SEED, Dimension::OVERWORLD);
+    let world_gen = make_world_gen();
     let block_registry = Arc::new(BlockRegistry);
 
     c.bench_function("features_generation", |b| {
@@ -297,7 +297,7 @@ fn bench_features_generation(c: &mut Criterion) {
 }
 
 fn bench_lighting_generation(c: &mut Criterion) {
-    let world_gen = get_world_gen(SEED, Dimension::OVERWORLD);
+    let world_gen = make_world_gen();
     let block_registry = Arc::new(BlockRegistry);
 
     c.bench_function("lighting_generation", |b| {
@@ -323,6 +323,27 @@ fn bench_lighting_generation(c: &mut Criterion) {
     });
 }
 
+fn bench_level_chunk_conversion(c: &mut Criterion) {
+    let world_gen = make_world_gen();
+    let block_registry = Arc::new(BlockRegistry);
+
+    c.bench_function("level_chunk_conversion", |b| {
+        b.iter_batched(
+            || setup_cache(StagedChunkEnum::Full, &world_gen, block_registry.as_ref()),
+            |mut cache| {
+                cache.advance(
+                    StagedChunkEnum::Full,
+                    &world_gen,
+                    block_registry.as_ref(),
+                    &LightingEngineConfig::Default,
+                );
+                black_box(cache);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+}
+
 criterion_group!(
     benches,
     bench_full_chunk_generation,
@@ -334,5 +355,6 @@ criterion_group!(
     bench_carvers_generation,
     bench_features_generation,
     bench_lighting_generation,
+    bench_level_chunk_conversion,
 );
 criterion_main!(benches);

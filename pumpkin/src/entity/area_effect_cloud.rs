@@ -13,6 +13,22 @@ type EffectEntry = (&'static StatusEffect, i32, u8, bool, bool, bool);
 use pumpkin_data::item_stack::ItemStack;
 use tokio::sync::Mutex;
 
+struct ParticleMeta<'a> {
+    particle_id: pumpkin_protocol::codec::var_int::VarInt,
+    data: &'a [u8],
+}
+
+impl pumpkin_protocol::java::client::play::MetadataSerializer for ParticleMeta<'_> {
+    fn write_metadata(
+        &self,
+        writer: &mut impl std::io::Write,
+    ) -> Result<(), pumpkin_protocol::ser::WritingError> {
+        use pumpkin_protocol::ser::NetworkWriteExt;
+        writer.write_var_int(&self.particle_id)?;
+        writer.write_slice(self.data)
+    }
+}
+
 /// The effect cloud entity that is spawned where a lingering potion lands.
 pub struct AreaEffectCloudEntity {
     pub entity: Entity,
@@ -97,23 +113,7 @@ impl EntityBase for AreaEffectCloudEntity {
     }
 
     fn init_data_tracker(&self) -> EntityBaseFuture<'_, ()> {
-        // Serialize bytes to the packet without a length prefix.
-        // This matches how the Minecraft protocol encodes particle data in EntityEffect.
-        fn serialize_bytes_no_prefix<S>(data: &[u8], serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
-            serializer.serialize_bytes(data)
-        }
-
         Box::pin(async move {
-            #[derive(serde::Serialize)]
-            struct ParticleMeta<'a> {
-                particle_id: pumpkin_protocol::codec::var_int::VarInt,
-                #[serde(serialize_with = "serialize_bytes_no_prefix")]
-                data: &'a [u8],
-            }
-
             // Send initial radius and particle (color) so clients render correctly
             let radius = *self.radius.lock().await;
 
@@ -173,29 +173,35 @@ impl EntityBase for AreaEffectCloudEntity {
             };
 
             // Send initial particle and radius
-            self.entity
-                .send_meta_data(&[pumpkin_protocol::java::client::play::Metadata::new(
+            self.entity.send_meta_data(
+                &[pumpkin_protocol::java::client::play::Metadata::new(
                     pumpkin_data::tracked_data::TrackedData::PARTICLE,
                     pumpkin_data::meta_data_type::MetaDataType::PARTICLE,
                     &meta,
-                )]);
+                )],
+                None,
+            );
 
-            self.entity
-                .send_meta_data(&[pumpkin_protocol::java::client::play::Metadata::new(
+            self.entity.send_meta_data(
+                &[pumpkin_protocol::java::client::play::Metadata::new(
                     pumpkin_data::tracked_data::TrackedData::RADIUS,
                     pumpkin_data::meta_data_type::MetaDataType::FLOAT,
                     radius,
-                )]);
+                )],
+                None,
+            );
 
             // Initial waiting flag
             let wait_time = *self.wait_time.lock().await;
             let is_waiting = 0 < wait_time;
-            self.entity
-                .send_meta_data(&[pumpkin_protocol::java::client::play::Metadata::new(
+            self.entity.send_meta_data(
+                &[pumpkin_protocol::java::client::play::Metadata::new(
                     pumpkin_data::tracked_data::TrackedData::WAITING,
                     pumpkin_data::meta_data_type::MetaDataType::BOOLEAN,
                     is_waiting,
-                )]);
+                )],
+                None,
+            );
         })
     }
 
@@ -225,12 +231,14 @@ impl EntityBase for AreaEffectCloudEntity {
 
             // When the waiting period ends, notify clients so they render full particles
             if age == wait_time && wait_time > 0 {
-                self.entity
-                    .send_meta_data(&[pumpkin_protocol::java::client::play::Metadata::new(
+                self.entity.send_meta_data(
+                    &[pumpkin_protocol::java::client::play::Metadata::new(
                         pumpkin_data::tracked_data::TrackedData::WAITING,
                         pumpkin_data::meta_data_type::MetaDataType::BOOLEAN,
                         false,
-                    )]);
+                    )],
+                    None,
+                );
             }
 
             if age < wait_time {
@@ -251,12 +259,14 @@ impl EntityBase for AreaEffectCloudEntity {
 
                 // Send new radius
                 drop(radius);
-                self.entity
-                    .send_meta_data(&[pumpkin_protocol::java::client::play::Metadata::new(
+                self.entity.send_meta_data(
+                    &[pumpkin_protocol::java::client::play::Metadata::new(
                         pumpkin_data::tracked_data::TrackedData::RADIUS,
                         pumpkin_data::meta_data_type::MetaDataType::FLOAT,
                         current_radius,
-                    )]);
+                    )],
+                    None,
+                );
             }
 
             // Tick down reapplication map
@@ -380,13 +390,14 @@ impl EntityBase for AreaEffectCloudEntity {
                     drop(radius_lock);
 
                     // Send updated radius to clients
-                    self.entity.send_meta_data(&[
-                        pumpkin_protocol::java::client::play::Metadata::new(
+                    self.entity.send_meta_data(
+                        &[pumpkin_protocol::java::client::play::Metadata::new(
                             pumpkin_data::tracked_data::TrackedData::RADIUS,
                             pumpkin_data::meta_data_type::MetaDataType::FLOAT,
                             current_radius,
-                        ),
-                    ]);
+                        )],
+                        None,
+                    );
                 }
 
                 // Apply duration-on-use (shorten lifespan)
