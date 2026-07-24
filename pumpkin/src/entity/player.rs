@@ -2951,6 +2951,10 @@ impl Player {
                 // TODO: Add per-tick fall_distance reset when abilities.flying is true (mirrors Player.aiStep())
                 // TODO: Force on_ground=false for Spectator players each tick (mirrors Player.tick())
                 // TODO: Add abilities.allow_flying check in LivingEntity::handle_fall_damage() as defense-in-depth
+                // TODO: Once layers 1-4 above are implemented, restrict this reset to Spectator only.
+                //       In vanilla, a Creative player falling without flight keeps their fallDistance
+                //       across a Survival switch (layer 4/abilities.mayfly guards damage server-side);
+                //       resetting here over-forgives that edge case for Creative.
                 if matches!(gamemode, GameMode::Creative | GameMode::Spectator) {
                     self.living_entity.fall_distance.store(0.0);
                 }
